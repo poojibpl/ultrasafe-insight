@@ -99,7 +99,7 @@ function Dashboard() {
     scrollTable();
   };
   const onMonth = (field: "created" | "closed", key: string) => {
-    const [y, m] = key.split("-").map(Number);
+    const y = Number(key.slice(0, 4)), m = Number(key.slice(5, 7));
     const from = toISODate(new Date(y, m - 1, 1)), to = toISODate(new Date(y, m, 0));
     commit(field === "created" ? { ...applied, createdFrom: from, createdTo: to } : { ...applied, closedFrom: from, closedTo: to });
     scrollTable();
