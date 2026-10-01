@@ -79,7 +79,7 @@ function parseDateLike(v: unknown): Date | null {
   if (typeof v === "number") return v > 20000 && v < 80000 ? serialToDate(v) : null;
   const s = String(v).trim();
   const m = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})/);
-  if (m) { const d = new Date(+m[3], +m[2] - 1, +m[1]); return isNaN(d.getTime()) ? null : d; }
+  if (m) { const d = new Date(+m[3]!, +m[2]! - 1, +m[1]!); return isNaN(d.getTime()) ? null : d; }
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) { const d = new Date(s.slice(0, 10) + "T00:00:00"); return isNaN(d.getTime()) ? null : d; }
   return null;
 }
@@ -105,12 +105,12 @@ export function parseWorkbook(buf: ArrayBuffer, fileName: string, preferredSheet
   if (!sheet) {
     let best = -1;
     for (const n of sheetNames) {
-      const hdr = (XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[n], { header: 1, range: 0 })[0] || []).map(String);
+      const hdr = (XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[n]!, { header: 1, range: 0 })[0] || []).map(String);
       const score = Object.keys(mapColumns(hdr)).length;
       if (score > best) { best = score; sheet = n; }
     }
   }
-  const ws = wb.Sheets[sheet];
+  const ws = wb.Sheets[sheet]!;
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: null, raw: true });
   const columns = (XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, range: 0 })[0] || [])
     .map((c) => String(c ?? "").trim()).filter(Boolean);
@@ -201,8 +201,8 @@ export function countBy(ts: Ticket[], fn: (t: Ticket) => string | null) {
 }
 export const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 export function monthLabel(k: string) {
-  const [y, m] = k.split("-");
-  return new Date(+y, +m - 1, 1).toLocaleString("en-IN", { month: "short", year: "2-digit" });
+  const y = Number(k.slice(0, 4)), m = Number(k.slice(5, 7));
+  return new Date(y, m - 1, 1).toLocaleString("en-IN", { month: "short", year: "2-digit" });
 }
 export function monthly(ts: Ticket[], pick: (t: Ticket) => Date | null) {
   const m = new Map<string, number>();
@@ -210,7 +210,7 @@ export function monthly(ts: Ticket[], pick: (t: Ticket) => Date | null) {
   const keys = [...m.keys()].sort();
   if (!keys.length) return [];
   const out: { key: string; label: string; value: number }[] = [];
-  let [y, mo] = keys[0].split("-").map(Number);
+  let y = Number(keys[0]!.slice(0, 4)), mo = Number(keys[0]!.slice(5, 7));
   const last = keys[keys.length - 1];
   for (let guard = 0; guard < 600; guard++) {
     const k = `${y}-${String(mo).padStart(2, "0")}`;
