@@ -8,3 +8,6 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+
+- Dashboard data is parsed client-side from `public/data/tickets.xlsx` (or a user-opened file) via SheetJS in `src/lib/tickets.ts`; why: data must always mirror the real Excel with no backend copy.
+- Columns are mapped to roles by header aliases; missing roles hide features instead of crashing; why: Excel structure may change.
