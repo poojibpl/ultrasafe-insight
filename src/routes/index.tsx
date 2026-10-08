@@ -3,16 +3,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Activity, AlertTriangle, CheckCircle2, Clock, FileSpreadsheet, Hourglass, Loader2, PanelLeftClose, PanelLeftOpen,
-  RefreshCw, Ticket as TicketIcon, Upload, X, CalendarRange,
+  RefreshCw, Ticket as TicketIcon, Upload, CalendarRange, ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FilterPanel } from "@/components/dash/FilterPanel";
 import { Charts } from "@/components/dash/Charts";
 import { TicketTable } from "@/components/dash/TicketTable";
 import { TicketDetail } from "@/components/dash/TicketDetail";
+import { AgingChart } from "@/components/dash/AgingChart";
+import { SelectionSummary } from "@/components/dash/SelectionSummary";
 import {
-  applyFilters, EMPTY_FILTERS, fmtDate, parseWorkbook, ROLE_LABELS, toISODate,
-  type Dataset, type Filters, type MultiRole, type Ticket,
+  applyBase, applyFilters, EMPTY_FILTERS, parseWorkbook, periodRange, kpiMatch, ROLE_LABELS,
+  type Dataset, type Filters, type KpiKey, type MultiRole, type Ticket,
 } from "@/lib/tickets";
 
 const DATA_URL = "/data/tickets.xlsx";
@@ -88,6 +90,9 @@ function Dashboard() {
   };
 
   const rows = useMemo(() => (ds ? applyFilters(ds.tickets, applied) : []), [ds, applied]);
+  const baseRows = useMemo(() => (ds ? applyBase(ds.tickets, applied) : []), [ds, applied]);
+  const agingRows = useMemo(() => (ds ? applyFilters(ds.tickets, { ...applied, ageBucket: null }) : []), [ds, applied]);
+  const [more, setMore] = useState(false);
   const dirty = JSON.stringify(draft) !== JSON.stringify(applied);
 
   const commit = (f: Filters) => { setApplied(f); setDraft(f); };
@@ -98,11 +103,9 @@ function Dashboard() {
     toast(`Filtered: ${value}`);
     scrollTable();
   };
-  const onMonth = (field: "created" | "closed", key: string) => {
-    const y = Number(key.slice(0, 4)), m = Number(key.slice(5, 7));
-    const from = toISODate(new Date(y, m - 1, 1)), to = toISODate(new Date(y, m, 0));
-    commit(field === "created" ? { ...applied, createdFrom: from, createdTo: to } : { ...applied, closedFrom: from, closedTo: to });
-    scrollTable();
+  const onKpi = (k: KpiKey) => {
+    commit({ ...applied, kpi: applied.kpi === k ? null : k, ageBucket: null });
+    if (applied.kpi !== k) scrollTable();
   };
 
   if (loading && !ds) return <Centered><Loader2 className="h-6 w-6 animate-spin text-primary" /> Reading Excel data…</Centered>;
@@ -163,10 +166,22 @@ function Dashboard() {
           )}
           {ds.duplicateIds > 0 && <Notice tone="warn">{ds.duplicateIds} rows share a Ticket ID with another row. All rows are kept and counted as they appear in the Excel.</Notice>}
 
-          <ActiveChips applied={applied} onChange={commit} />
-          <Kpis ds={ds} rows={rows} applied={applied} />
-          <Charts ds={ds} rows={rows} onDrill={onDrill} onMonth={onMonth} />
-          <div ref={tableRef} className="scroll-mt-16"><TicketTable ds={ds} rows={rows} onSelect={setSelected} /></div>
+          <Kpis ds={ds} rows={baseRows} applied={applied} onSelect={onKpi} />
+          <Charts ds={ds} rows={rows} onDrill={onDrill} part="summary" />
+          {(ds.mapping.days || ds.mapping.created) && ds.mapping.status && (
+            <AgingChart ds={ds} rows={agingRows} active={applied.ageBucket} onSelect={(b) => { commit({ ...applied, ageBucket: b }); if (b) scrollTable(); }} />
+          )}
+          <div className="rounded-lg border bg-card shadow-sm">
+            <button onClick={() => setMore(!more)} className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-semibold hover:bg-secondary/40">
+              <span>Product, Engineer, Zone, Branch &amp; TAT Analysis</span>
+              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${more ? "rotate-180" : ""}`} />
+            </button>
+            {more && <div className="border-t p-4"><Charts ds={ds} rows={rows} onDrill={onDrill} part="more" /></div>}
+          </div>
+          <div ref={tableRef} className="scroll-mt-16 space-y-4">
+            <SelectionSummary rows={rows} applied={applied} onChange={commit} onClear={() => commit(EMPTY_FILTERS)} />
+            <TicketTable ds={ds} rows={rows} onSelect={setSelected} />
+          </div>
         </main>
       </div>
       <TicketDetail ds={ds} ticket={selected} onClose={() => setSelected(null)} />
@@ -174,7 +189,7 @@ function Dashboard() {
   );
 }
 
-function Kpis({ ds, rows, applied }: { ds: Dataset; rows: Ticket[]; applied: Filters }) {
+function Kpis({ ds, rows, applied, onSelect }: { ds: Dataset; rows: Ticket[]; applied: Filters; onSelect: (k: KpiKey) => void }) {
   const k = useMemo(() => {
     let open = 0, closed = 0, other = 0, tatSum = 0, tatN = 0;
     for (const t of rows) {
@@ -184,62 +199,54 @@ function Kpis({ ds, rows, applied }: { ds: Dataset; rows: Ticket[]; applied: Fil
     return { open, closed, other, avg: tatN ? tatSum / tatN : null, tatN };
   }, [rows]);
   const period = useMemo(() => {
-    if (applied.createdFrom || applied.createdTo) {
-      return { value: rows.filter((t) => t.created).length, label: `${applied.createdFrom ? fmtDate(new Date(applied.createdFrom + "T00:00")) : "start"} → ${applied.createdTo ? fmtDate(new Date(applied.createdTo + "T00:00")) : "latest"}` };
-    }
-    const ds2 = rows.filter((t) => t.created);
-    if (!ds2.length) return { value: 0, label: "No creation dates" };
-    const max = Math.max(...ds2.map((t) => t.created!.getTime()));
-    const from = max - 29 * 86400000;
-    return { value: ds2.filter((t) => t.created!.getTime() >= from).length, label: `Last 30 days of data (to ${fmtDate(new Date(max))})` };
+    const p = periodRange(rows, applied);
+    return { value: rows.filter((t) => kpiMatch(t, "period", p)).length, label: p.label };
   }, [rows, applied]);
-  const pct = (n: number) => (rows.length ? `${((n / rows.length) * 100).toFixed(1)}% of selection` : "");
+  const pct = (n: number) => (rows.length ? `${((n / rows.length) * 100).toFixed(1)}% of total` : "");
   const total = ds.tickets.length;
-  return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-      <Kpi icon={TicketIcon} label="Total Tickets" value={rows.length} sub={rows.length === total ? "All rows in Excel" : `of ${total.toLocaleString("en-IN")} in Excel`} tone="primary" />
-      <Kpi icon={Clock} label="Open Tickets" value={k.open} sub={pct(k.open)} tone="primary" />
-      <Kpi icon={CheckCircle2} label="Closed Tickets" value={k.closed} sub={pct(k.closed)} tone="success" />
-      <Kpi icon={Hourglass} label="Pending / Other" value={k.other} sub={pct(k.other)} tone="warning" />
-      <Kpi icon={Activity} label="Average TAT" value={ds.mapping.created && ds.mapping.closed ? (k.avg == null ? "—" : `${k.avg.toFixed(1)} d`) : "N/A"} sub={ds.mapping.created && ds.mapping.closed ? `${k.tatN.toLocaleString("en-IN")} tickets with both dates` : "Date column missing"} tone="success" />
-      <Kpi icon={CalendarRange} label="Created in Period" value={ds.mapping.created ? period.value : "N/A"} sub={ds.mapping.created ? period.label : "Creation date missing"} tone="primary" />
-    </div>
+  const hasTat = !!(ds.mapping.created && ds.mapping.closed);
+  const card = (key: KpiKey, p: Omit<KpiProps, "active" | "onClick">, enabled = true) => (
+    <Kpi {...p} active={applied.kpi === key} onClick={enabled ? () => onSelect(key) : undefined} />
   );
-}
-
-function Kpi({ icon: Icon, label, value, sub, tone }: { icon: typeof Activity; label: string; value: number | string; sub?: string; tone: "primary" | "success" | "warning" }) {
-  const toneCls = tone === "success" ? "bg-success/12 text-success" : tone === "warning" ? "bg-warning/20 text-foreground" : "bg-primary/10 text-primary";
   return (
-    <div className="rounded-lg border bg-card p-4 shadow-sm">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-muted-foreground">{label}</span>
-        <span className={`rounded-md p-1.5 ${toneCls}`}><Icon className="h-4 w-4" /></span>
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">Click a card to see its tickets and Ticket Type breakdown</span>
+        {applied.kpi && <button onClick={() => onSelect(applied.kpi!)} className="text-xs font-medium text-primary hover:underline">Clear KPI selection</button>}
       </div>
-      <div className="mt-2 text-2xl font-semibold tabular-nums">{typeof value === "number" ? value.toLocaleString("en-IN") : value}</div>
-      {sub && <div className="mt-1 truncate text-[11px] text-muted-foreground" title={sub}>{sub}</div>}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        {card("total", { icon: TicketIcon, label: "Total Tickets", value: rows.length, sub: rows.length === total ? "All rows in Excel" : `of ${total.toLocaleString("en-IN")} in Excel`, tone: "primary" })}
+        {card("open", { icon: Clock, label: "Open Tickets", value: k.open, sub: pct(k.open), tone: "primary" })}
+        {card("closed", { icon: CheckCircle2, label: "Closed Tickets", value: k.closed, sub: pct(k.closed), tone: "success" })}
+        {card("pending", { icon: Hourglass, label: "Pending / Other", value: k.other, sub: pct(k.other), tone: "warning" })}
+        {card("tat", { icon: Activity, label: "Average TAT", value: hasTat ? (k.avg == null ? "—" : `${k.avg.toFixed(1)} days`) : "N/A", sub: hasTat ? `${k.tatN.toLocaleString("en-IN")} tickets with both dates` : "Date column missing", tone: "primary" }, hasTat)}
+        {card("period", { icon: CalendarRange, label: "Created in Period", value: ds.mapping.created ? period.value : "N/A", sub: ds.mapping.created ? period.label : "Creation date missing", tone: "primary" }, !!ds.mapping.created)}
+      </div>
     </div>
   );
 }
 
-function ActiveChips({ applied, onChange }: { applied: Filters; onChange: (f: Filters) => void }) {
-  const chips: { label: string; clear: () => Filters }[] = [];
-  if (applied.ticketId) chips.push({ label: `Ticket ID: ${applied.ticketId}`, clear: () => ({ ...applied, ticketId: "" }) });
-  if (applied.serial) chips.push({ label: `Serial: ${applied.serial}`, clear: () => ({ ...applied, serial: "" }) });
-  if (applied.statusGroup.length) chips.push({ label: `Status group: ${applied.statusGroup.join(", ")}`, clear: () => ({ ...applied, statusGroup: [] }) });
-  for (const [k, v] of Object.entries(applied.multi)) if (v?.length) chips.push({ label: `${ROLE_LABELS[k as MultiRole]}: ${v.length > 2 ? `${v.length} selected` : v.join(", ")}`, clear: () => ({ ...applied, multi: { ...applied.multi, [k]: [] } }) });
-  if (applied.createdFrom || applied.createdTo) chips.push({ label: `Created: ${applied.createdFrom || "…"} → ${applied.createdTo || "…"}`, clear: () => ({ ...applied, createdFrom: "", createdTo: "" }) });
-  if (applied.closedFrom || applied.closedTo) chips.push({ label: `Closed: ${applied.closedFrom || "…"} → ${applied.closedTo || "…"}`, clear: () => ({ ...applied, closedFrom: "", closedTo: "" }) });
-  if (!chips.length) return null;
+interface KpiProps { icon: typeof Activity; label: string; value: number | string; sub?: string; tone: "primary" | "success" | "warning"; active: boolean; onClick?: (() => void) | undefined }
+function Kpi({ icon: Icon, label, value, sub, tone, active, onClick }: KpiProps) {
+  const iconCls = tone === "success" ? "bg-success/10 text-success" : tone === "warning" ? "bg-warning/15 text-warning" : "bg-primary/10 text-primary";
+  const bar = tone === "success" ? "bg-success" : tone === "warning" ? "bg-warning" : "bg-primary";
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-xs font-medium text-muted-foreground">Active filters:</span>
-      {chips.map((c) => (
-        <button key={c.label} onClick={() => onChange(c.clear())} className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs text-primary hover:bg-primary/10">
-          {c.label} <X className="h-3 w-3" />
-        </button>
-      ))}
-      <button onClick={() => onChange(EMPTY_FILTERS)} className="text-xs text-muted-foreground underline hover:text-foreground">Clear all</button>
-    </div>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      aria-pressed={active}
+      className={`group relative overflow-hidden rounded-lg border bg-card p-4 text-left shadow-sm transition-all ${onClick ? "cursor-pointer hover:-translate-y-0.5 hover:shadow-md" : "cursor-default"} ${active ? "border-primary ring-2 ring-primary/25" : "hover:border-primary/40"}`}
+    >
+      <span className={`absolute inset-x-0 top-0 h-1 ${bar} ${active ? "opacity-100" : "opacity-60"}`} />
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
+        <span className={`rounded-md p-1.5 ${iconCls}`}><Icon className="h-4 w-4" /></span>
+      </div>
+      <div className="mt-2 text-2xl font-semibold tabular-nums text-foreground">{typeof value === "number" ? value.toLocaleString("en-IN") : value}</div>
+      {sub && <div className="mt-1 truncate text-[11px] text-muted-foreground" title={sub}>{sub}</div>}
+      {active && <span className="mt-2 inline-block rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-primary">Selected</span>}
+    </button>
   );
 }
 

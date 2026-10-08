@@ -53,6 +53,17 @@
   --color-chart-5: var(--chart-5);
   --color-chart-6: var(--chart-6);
   --color-success: var(--success);
+  --color-age-1: var(--age-1);
+  --color-age-1-bg: var(--age-1-bg);
+  --color-age-2: var(--age-2);
+  --color-age-2-bg: var(--age-2-bg);
+  --color-age-3: var(--age-3);
+  --color-age-3-bg: var(--age-3-bg);
+  --color-age-4: var(--age-4);
+  --color-age-4-bg: var(--age-4-bg);
+  --color-age-5: var(--age-5);
+  --color-age-5-bg: var(--age-5-bg);
+
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
   --font-sans: var(--font-sans);
@@ -97,6 +108,16 @@
   --chart-4: oklch(0.74 0.14 70);
   --chart-5: oklch(0.55 0.03 250);
   --chart-6: oklch(0.62 0.15 25);
+  --age-1: oklch(0.6 0.12 160);
+  --age-1-bg: oklch(0.95 0.035 160);
+  --age-2: oklch(0.55 0.11 95);
+  --age-2-bg: oklch(0.96 0.05 95);
+  --age-3: oklch(0.6 0.14 65);
+  --age-3-bg: oklch(0.95 0.05 65);
+  --age-4: oklch(0.6 0.16 45);
+  --age-4-bg: oklch(0.94 0.05 45);
+  --age-5: oklch(0.55 0.18 27);
+  --age-5-bg: oklch(0.94 0.04 27);
   --sidebar: oklch(1 0 0);
   --sidebar-foreground: oklch(0.22 0.03 250);
   --sidebar-primary: oklch(0.47 0.13 250);
