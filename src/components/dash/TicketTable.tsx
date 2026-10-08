@@ -4,15 +4,18 @@ import { ArrowDown, ArrowUp, Columns3, Download, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { AgeBadge } from "./AgingChart";
 import { fmtCell, type Dataset, type Ticket, type Role, type Cell } from "@/lib/tickets";
 
 const TAT_COL = "TAT (days)";
-const DEFAULT_ROLES: Role[] = ["ticketId", "customer", "created", "closed", "status", "type", "product", "serial", "engineer", "branch", "zone", "warranty", "city", "state"];
+const AGE_CALC = "No of Days (calculated)";
+const DEFAULT_ROLES: Role[] = ["ticketId", "customer", "created", "closed", "status", "type", "days", "product", "serial", "engineer", "branch", "zone", "warranty", "city", "state"];
 
 export function TicketTable({ ds, rows, onSelect }: { ds: Dataset; rows: Ticket[]; onSelect: (t: Ticket) => void }) {
-  const allCols = useMemo(() => [...ds.columns, ...(ds.mapping.created && ds.mapping.closed ? [TAT_COL] : [])], [ds]);
+  const ageCol = ds.mapping.days ?? AGE_CALC;
+  const allCols = useMemo(() => [...ds.columns, ...(ds.mapping.days ? [] : [AGE_CALC]), ...(ds.mapping.created && ds.mapping.closed ? [TAT_COL] : [])], [ds]);
   const defaults = useMemo(() => {
-    const d = DEFAULT_ROLES.map((r) => ds.mapping[r]).filter(Boolean) as string[];
+    const d = DEFAULT_ROLES.map((r) => (r === "days" ? ds.mapping.days ?? AGE_CALC : ds.mapping[r])).filter(Boolean) as string[];
     return ds.mapping.created && ds.mapping.closed ? [...d, TAT_COL] : d;
   }, [ds]);
   const [visible, setVisible] = useState<string[]>(defaults);
@@ -22,7 +25,7 @@ export function TicketTable({ ds, rows, onSelect }: { ds: Dataset; rows: Ticket[
   const [page, setPage] = useState(0);
   const [size, setSize] = useState(25);
 
-  const val = (t: Ticket, c: string): Cell => (c === TAT_COL ? t.tat : t.raw[c] ?? null);
+  const val = (t: Ticket, c: string): Cell => (c === TAT_COL ? t.tat : c === ageCol ? t.age : t.raw[c] ?? null);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -105,7 +108,7 @@ export function TicketTable({ ds, rows, onSelect }: { ds: Dataset; rows: Ticket[
                   const isStatus = c === ds.mapping.status;
                   return (
                     <td key={c} className="max-w-[260px] truncate whitespace-nowrap px-3 py-2" title={v}>
-                      {isStatus && v ? <StatusBadge group={t.statusGroup} text={v} /> : v || <span className="text-muted-foreground">—</span>}
+                      {c === ageCol ? <AgeBadge n={t.age} /> : isStatus && v ? <StatusBadge group={t.statusGroup} text={v} /> : v || <span className="text-muted-foreground">—</span>}
                     </td>
                   );
                 })}
