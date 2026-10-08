@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
 import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { ChartCard, MissingNote, PALETTE, STATUS_GROUP_COLORS } from "./ChartCard";
-import { BLANK, TAT_BUCKETS, countBy, monthly, type Dataset, type MultiRole, type Ticket, ROLE_LABELS } from "@/lib/tickets";
+import { BLANK, TAT_BUCKETS, countBy, type Dataset, type MultiRole, type Ticket, ROLE_LABELS } from "@/lib/tickets";
 
 const axis = { fontSize: 11, fill: "var(--muted-foreground)" };
 const tip = { contentStyle: { borderRadius: 8, border: "1px solid var(--border)", fontSize: 12 } };
@@ -12,7 +12,7 @@ interface Props {
   ds: Dataset;
   rows: Ticket[];
   onDrill: (role: MultiRole | "statusGroup", value: string) => void;
-  onMonth: (field: "created" | "closed", key: string) => void;
+  part: "summary" | "more";
 }
 
 function HBar({ data, onClick, color = "var(--chart-1)", height }: { data: { name: string; value: number }[]; onClick: (n: string) => void; color?: string; height?: number }) {
@@ -30,7 +30,7 @@ function HBar({ data, onClick, color = "var(--chart-1)", height }: { data: { nam
   );
 }
 
-export function Charts({ ds, rows, onDrill, onMonth }: Props) {
+export function Charts({ ds, rows, onDrill, part }: Props) {
   const m = ds.mapping;
   const [engSort, setEngSort] = useState<"desc" | "asc" | "name">("desc");
   const [engAll, setEngAll] = useState(false);
@@ -48,8 +48,6 @@ export function Charts({ ds, rows, onDrill, onMonth }: Props) {
     if (engSort === "name") d.sort((a, b) => a.name.localeCompare(b.name));
     return d;
   }, [rows, engSort]);
-  const created = useMemo(() => monthly(rows, (t) => t.created), [rows]);
-  const closed = useMemo(() => monthly(rows, (t) => t.closed), [rows]);
   const tatRows = useMemo(() => rows.filter((t) => t.tat != null), [rows]);
   const tatDist = useMemo(() => TAT_BUCKETS.map(([name, lo, hi]) => ({ name, value: tatRows.filter((t) => t.tat! >= lo && t.tat! <= hi).length })), [tatRows]);
   const tatEng = useMemo(() => {
@@ -63,7 +61,7 @@ export function Charts({ ds, rows, onDrill, onMonth }: Props) {
     <button onClick={() => set(!on)} className="rounded border px-2 py-1 text-xs text-primary hover:bg-secondary">{on ? "Show top 15" : `View all (${total})`}</button>
   );
 
-  return (
+  const summary = (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
       <ChartCard title="Ticket Status" subtitle="Click a slice to filter" className="xl:col-span-4">
         {!m.status ? <MissingNote what={need("status")} /> : (
@@ -92,34 +90,11 @@ export function Charts({ ds, rows, onDrill, onMonth }: Props) {
         {!m.type ? <MissingNote what={need("type")} /> : <HBar data={types} onClick={(n) => onDrill("type", n)} color="var(--chart-2)" />}
       </ChartCard>
 
-      <ChartCard title="Monthly Ticket Trend" subtitle="By System Ticket Creation Date · click a month to filter" className="xl:col-span-6">
-        {!m.created ? <MissingNote what={need("created")} /> : created.length === 0 ? <MissingNote what="No valid creation dates in current selection." /> : (
-          <ResponsiveContainer width="100%" height={260}>
-            <AreaChart data={created} onClick={(e: { activePayload?: { payload: { key: string } }[] }) => e?.activePayload?.[0] && onMonth("created", e.activePayload[0].payload.key)}>
-              <CartesianGrid stroke="var(--border)" vertical={false} />
-              <XAxis dataKey="label" tick={axis} minTickGap={16} />
-              <YAxis tick={axis} allowDecimals={false} />
-              <Tooltip {...tip} />
-              <Area type="monotone" dataKey="value" name="Tickets created" stroke="var(--chart-1)" fill="var(--chart-1)" fillOpacity={0.12} strokeWidth={2} className="cursor-pointer" />
-            </AreaChart>
-          </ResponsiveContainer>
-        )}
-      </ChartCard>
-
-      <ChartCard title="Ticket Closure Trend" subtitle="By Ticket Closed Date · click a month to filter" className="xl:col-span-6">
-        {!m.closed ? <MissingNote what={need("closed")} /> : closed.length === 0 ? <MissingNote what="No valid closed dates in current selection." /> : (
-          <ResponsiveContainer width="100%" height={260}>
-            <AreaChart data={closed} onClick={(e: { activePayload?: { payload: { key: string } }[] }) => e?.activePayload?.[0] && onMonth("closed", e.activePayload[0].payload.key)}>
-              <CartesianGrid stroke="var(--border)" vertical={false} />
-              <XAxis dataKey="label" tick={axis} minTickGap={16} />
-              <YAxis tick={axis} allowDecimals={false} />
-              <Tooltip {...tip} />
-              <Area type="monotone" dataKey="value" name="Tickets closed" stroke="var(--chart-2)" fill="var(--chart-2)" fillOpacity={0.12} strokeWidth={2} />
-            </AreaChart>
-          </ResponsiveContainer>
-        )}
-      </ChartCard>
-
+    </div>
+  );
+  if (part === "summary") return summary;
+  return (
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
       <ChartCard title="Product / Ultrasound Model" subtitle={`${products.length} models · click to filter`} className="xl:col-span-6" actions={products.length > 15 && toggleBtn(prodAll, setProdAll, products.length)}>
         {!m.product ? <MissingNote what={need("product")} /> : <div className="max-h-[520px] overflow-y-auto"><HBar data={prodAll ? products : products.slice(0, 15)} onClick={(n) => onDrill("product", n)} color="var(--chart-3)" /></div>}
       </ChartCard>
