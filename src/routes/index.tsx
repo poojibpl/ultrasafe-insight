@@ -226,7 +226,7 @@ function Kpis({ ds, rows, applied, onSelect }: { ds: Dataset; rows: Ticket[]; ap
   );
 }
 
-interface KpiProps { icon: typeof Activity; label: string; value: number | string; sub?: string; tone: "primary" | "success" | "warning"; active: boolean; onClick?: () => void }
+interface KpiProps { icon: typeof Activity; label: string; value: number | string; sub?: string; tone: "primary" | "success" | "warning"; active: boolean; onClick?: (() => void) | undefined }
 function Kpi({ icon: Icon, label, value, sub, tone, active, onClick }: KpiProps) {
   const iconCls = tone === "success" ? "bg-success/10 text-success" : tone === "warning" ? "bg-warning/15 text-warning" : "bg-primary/10 text-primary";
   const bar = tone === "success" ? "bg-success" : tone === "warning" ? "bg-warning" : "bg-primary";
