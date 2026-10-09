@@ -57,14 +57,22 @@ export interface Dataset {
   loadedAt: Date;
 }
 
-const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+/** Null-safe header/value normalisation for matching (never throws). */
+const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+/** Display-safe header: trims, collapses spaces and line breaks. */
+export const cleanHeader = (s: unknown) => String(s ?? "").replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
 
-export function mapColumns(cols: string[]) {
+export class ExcelReadError extends Error {
+  constructor(message: string, public detectedHeaders: string[] = [], public missingColumns: string[] = []) { super(message); }
+}
+
+export function mapColumns(cols: unknown[]) {
+  const list = cols.map((c) => cleanHeader(c)).filter(Boolean);
   const mapping: Partial<Record<Role, string>> = {};
   const used = new Set<string>();
   (Object.keys(ALIASES) as Role[]).forEach((role) => {
     for (const a of ALIASES[role]) {
-      const hit = cols.find((c) => !used.has(c) && norm(c) === a);
+      const hit = list.find((c) => !used.has(c) && norm(c) === a);
       if (hit) { mapping[role] = hit; used.add(hit); break; }
     }
   });
@@ -90,36 +98,77 @@ const isBlank = (v: unknown) => v == null || (typeof v === "string" && (v.trim()
 export const cleanStr = (v: unknown): string | null => {
   if (isBlank(v)) return null;
   if (v instanceof Date) return fmtDate(v);
-  return String(v).replace(/\u00a0/g, " ").replace(/Â/g, "").trim() || null;
+  return String(v ?? "").replace(/\u00a0/g, " ").replace(/Â/g, "").trim() || null;
 };
 
 export function classifyStatus(s: string | null): Ticket["statusGroup"] {
-  const n = (s || "").toLowerCase().trim();
+  const n = String(s ?? "").toLowerCase().trim();
   if (/^clos/.test(n)) return "Closed";
   if (n === "open") return "Open";
   return "Pending / Other";
 }
 
+const toRow = (r: unknown): unknown[] => (Array.isArray(r) ? Array.from(r, (c) => (c === undefined ? null : c)) : []);
+
+/** Finds the header row (within the first 15 rows) that maps the most known columns. */
+function findHeader(aoa: unknown[][]) {
+  let best = { idx: 0, score: -1 };
+  for (let i = 0; i < Math.min(aoa.length, 15); i++) {
+    const score = Object.keys(mapColumns(toRow(aoa[i]))).length;
+    if (score > best.score) best = { idx: i, score };
+  }
+  return best;
+}
+
 export function parseWorkbook(buf: ArrayBuffer, fileName: string, preferredSheet?: string): Dataset {
-  const wb = XLSX.read(buf, { type: "array", cellDates: false });
-  const sheetNames = wb.SheetNames;
-  // Pick sheet: preferred, else the one whose headers map the most roles.
+  let wb: XLSX.WorkBook;
+  try {
+    wb = XLSX.read(buf, { type: "array", cellDates: false });
+  } catch {
+    throw new ExcelReadError("Could not read the Excel file. Please check that it is a valid .xlsx/.xls/.csv file.");
+  }
+  const sheetNames = wb.SheetNames ?? [];
+  if (!sheetNames.length) throw new ExcelReadError("The Excel file contains no worksheets.");
+  const sheetAoa = (n: string) => XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[n]!, { header: 1, defval: null, raw: true, blankrows: false }).map(toRow);
   let sheet = preferredSheet && sheetNames.includes(preferredSheet) ? preferredSheet : "";
   if (!sheet) {
     let best = -1;
     for (const n of sheetNames) {
-      const hdr = (XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[n]!, { header: 1, range: 0 })[0] || []).map(String);
-      const score = Object.keys(mapColumns(hdr)).length;
-      if (score > best) { best = score; sheet = n; }
+      const sc = findHeader(sheetAoa(n)).score;
+      if (sc > best) { best = sc; sheet = n; }
     }
   }
-  const ws = wb.Sheets[sheet]!;
-  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: null, raw: true });
-  const columns = (XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, range: 0 })[0] || [])
-    .map((c) => String(c ?? "").trim()).filter(Boolean);
+  const aoa = sheetAoa(sheet);
+  const { idx: headerIdx } = findHeader(aoa);
+  const headerRow = toRow(aoa[headerIdx]);
+  // Unique, non-blank column names (original text kept; blanks/duplicates get a suffix).
+  const columns: string[] = [];
+  const colIndex: number[] = [];
+  const counts = new Map<string, number>();
+  headerRow.forEach((h, i) => {
+    let name = cleanHeader(h);
+    const hasData = aoa.slice(headerIdx + 1).some((r) => !isBlank(r[i]));
+    if (!name) { if (!hasData) return; name = `Column ${i + 1}`; }
+    const c = (counts.get(name) || 0) + 1; counts.set(name, c);
+    columns.push(c > 1 ? `${name} (${c})` : name);
+    colIndex.push(i);
+  });
+  const rows: Record<string, unknown>[] = aoa.slice(headerIdx + 1).map((r) => {
+    const o: Record<string, unknown> = {};
+    columns.forEach((c, k) => { o[c] = r[colIndex[k]!] ?? null; });
+    return o;
+  });
   const dateColumns = columns.filter((c) => /date/i.test(c));
   const mapping = mapColumns(columns);
   const missing = (Object.keys(ALIASES) as Role[]).filter((r) => !mapping[r] && r !== "days");
+  const required: Role[] = ["ticketId", "status"];
+  const reqMissing = required.filter((r) => !mapping[r]);
+  if (reqMissing.length) {
+    throw new ExcelReadError(
+      `Required column(s) not found in sheet “${sheet}”: ${reqMissing.map((r) => ROLE_LABELS[r]).join(", ")}.`,
+      columns, reqMissing.map((r) => ROLE_LABELS[r]),
+    );
+  }
   const today = new Date(); today.setHours(0, 0, 0, 0);
 
   const seen = new Map<string, number>();
@@ -129,7 +178,7 @@ export function parseWorkbook(buf: ArrayBuffer, fileName: string, preferredSheet
     if (Object.values(r).every(isBlank)) return;
     const raw: Record<string, Cell> = {};
     for (const c of columns) {
-      const v = r[c];
+      const v = r[c] ?? null;
       if (isBlank(v)) raw[c] = null;
       else if (dateColumns.includes(c)) raw[c] = parseDateLike(v) ?? cleanStr(v);
       else raw[c] = typeof v === "number" ? v : cleanStr(v);
@@ -158,6 +207,7 @@ export function parseWorkbook(buf: ArrayBuffer, fileName: string, preferredSheet
     if (id) { const c = seen.get(id) || 0; if (c >= 1) duplicateIds++; seen.set(id, c + 1); }
     tickets.push({ _idx: i, raw, id, created, closed, tat, age, statusGroup, dims });
   });
+  if (!tickets.length) throw new ExcelReadError(`Sheet “${sheet}” has headers but no ticket rows.`, columns);
   return { fileName, sheetNames, sheet, columns, dateColumns, mapping, missing, tickets, duplicateIds, loadedAt: new Date() };
 }
 
@@ -228,8 +278,8 @@ export function applyFilters(ts: Ticket[], f: Filters): Ticket[] {
   return r;
 }
 export function applyBase(ts: Ticket[], f: Filters): Ticket[] {
-  const idQ = f.ticketId.trim().toLowerCase();
-  const snQ = f.serial.trim().toLowerCase();
+  const idQ = String(f.ticketId ?? "").trim().toLowerCase();
+  const snQ = String(f.serial ?? "").trim().toLowerCase();
   const cf = dayStart(f.createdFrom), ct = dayEnd(f.createdTo), xf = dayStart(f.closedFrom), xt = dayEnd(f.closedTo);
   const multis = Object.entries(f.multi).filter(([, v]) => v && v.length) as [MultiRole, string[]][];
   const sets = multis.map(([k, v]) => [k, new Set(v)] as const);
@@ -296,3 +346,43 @@ export function fmtCell(v: Cell): string {
   return String(v);
 }
 export const toISODate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+/** Keeps only filter selections whose values exist in the (new) active dataset. */
+export function pruneFilters(f: Filters, ds: Dataset): Filters {
+  const multi: Filters["multi"] = {};
+  for (const [k, v] of Object.entries(f.multi) as [MultiRole, string[] | undefined][]) {
+    if (!v?.length || !ds.mapping[k]) continue;
+    const have = new Set(ds.tickets.map((t) => t.dims[k] ?? BLANK));
+    const kept = v.filter((x) => have.has(x));
+    if (kept.length) multi[k] = kept;
+  }
+  return {
+    ...f, multi,
+    ticketId: ds.mapping.ticketId ? f.ticketId : "", serial: ds.mapping.serial ? f.serial : "",
+    createdFrom: ds.mapping.created ? f.createdFrom : "", createdTo: ds.mapping.created ? f.createdTo : "",
+    closedFrom: ds.mapping.closed ? f.closedFrom : "", closedTo: ds.mapping.closed ? f.closedTo : "",
+  };
+}
+
+/** Per-group operational summary (engineer / zone / branch / product). */
+export function groupStats(ts: Ticket[], role: Role) {
+  const m = new Map<string, { total: number; open: number; closed: number; other: number; tatS: number; tatN: number; ageS: number; ageN: number; types: Map<string, number> }>();
+  for (const t of ts) {
+    const k = t.dims[role] ?? BLANK;
+    let g = m.get(k);
+    if (!g) { g = { total: 0, open: 0, closed: 0, other: 0, tatS: 0, tatN: 0, ageS: 0, ageN: 0, types: new Map() }; m.set(k, g); }
+    g.total++;
+    if (t.statusGroup === "Open") g.open++; else if (t.statusGroup === "Closed") g.closed++; else g.other++;
+    if (t.tat != null) { g.tatS += t.tat; g.tatN++; }
+    if (t.statusGroup !== "Closed" && t.age != null) { g.ageS += t.age; g.ageN++; }
+    const ty = t.dims.type ?? BLANK; g.types.set(ty, (g.types.get(ty) || 0) + 1);
+  }
+  return [...m.entries()].map(([name, g]) => {
+    const top = [...g.types.entries()].sort((a, b) => b[1] - a[1])[0];
+    return {
+      name, total: g.total, open: g.open, closed: g.closed, other: g.other,
+      avgTat: g.tatN ? g.tatS / g.tatN : null, avgAge: g.ageN ? g.ageS / g.ageN : null,
+      topType: top ? `${top[0]} (${top[1]})` : "",
+    };
+  }).sort((a, b) => b.total - a.total);
+}
