@@ -10,6 +10,7 @@ import { FilterPanel } from "@/components/dash/FilterPanel";
 import { Charts } from "@/components/dash/Charts";
 import { TicketTable } from "@/components/dash/TicketTable";
 import { TicketDetail } from "@/components/dash/TicketDetail";
+import { GroupAnalysis } from "@/components/dash/GroupAnalysis";
 import { AgingChart } from "@/components/dash/AgingChart";
 import { SelectionSummary } from "@/components/dash/SelectionSummary";
 import {
@@ -212,7 +213,7 @@ function Dashboard() {
               <span>Product, Engineer, Zone, Branch &amp; TAT Analysis</span>
               <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${more ? "rotate-180" : ""}`} />
             </button>
-            {more && <div className="border-t p-4"><Charts ds={ds} rows={rows} onDrill={onDrill} part="more" /></div>}
+            {more && <div className="space-y-4 border-t p-4"><GroupAnalysis ds={ds} rows={rows} selected={applied.multi} onPick={onDrill} /><Charts ds={ds} rows={rows} onDrill={onDrill} part="more" /></div>}
           </div>
           <div ref={tableRef} className="scroll-mt-16 space-y-4">
             <SelectionSummary rows={rows} applied={applied} onChange={commit} onClear={() => commit(EMPTY_FILTERS)} />
