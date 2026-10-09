@@ -28,3 +28,9 @@ With several sheets, the best-matching sheet is chosen and a worksheet selector 
 - **Closed** = status starting with "Close"; **Open** = status "Open"; everything else = **Pending / Other**.
 - **TAT (days)** = Ticket Closed Date − System Ticket Creation Date, only when both dates exist and closed ≥ created.
 - Blank cells and `#` are treated as empty. Duplicate Ticket IDs are kept and flagged.
+
+## Uploading a new Excel
+
+- **Open Excel** replaces all dashboard data with the new file only after it has been read and checked. Old rows are never mixed in.
+- Required columns: `Ticket ID` and `Ticket Status`. If either is missing, the previous data stays on screen and the error lists the missing and detected headers.
+- **Reload Data** re-reads the file currently in use; it never switches back to `tickets.xlsx` while an uploaded file is active.

@@ -9,5 +9,5 @@
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
 
-- Dashboard data is parsed client-side from `public/data/tickets.xlsx` (or a user-opened file) via SheetJS in `src/lib/tickets.ts`; why: data must always mirror the real Excel with no backend copy.
+- The active dataset (`ds` in `src/routes/index.tsx`) is the single source of truth; it is replaced only after `parseWorkbook` succeeds, never merged; why: uploads must fully replace old data and failures must keep the last valid data.
 - Columns are mapped to roles by header aliases; missing roles hide features instead of crashing; why: Excel structure may change.
