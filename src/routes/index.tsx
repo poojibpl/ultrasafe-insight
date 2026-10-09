@@ -10,14 +10,16 @@ import { FilterPanel } from "@/components/dash/FilterPanel";
 import { Charts } from "@/components/dash/Charts";
 import { TicketTable } from "@/components/dash/TicketTable";
 import { TicketDetail } from "@/components/dash/TicketDetail";
+import { GroupAnalysis } from "@/components/dash/GroupAnalysis";
 import { AgingChart } from "@/components/dash/AgingChart";
 import { SelectionSummary } from "@/components/dash/SelectionSummary";
 import {
-  applyBase, applyFilters, EMPTY_FILTERS, parseWorkbook, periodRange, kpiMatch, ROLE_LABELS,
+  applyBase, applyFilters, EMPTY_FILTERS, ExcelReadError, pruneFilters, parseWorkbook, periodRange, kpiMatch, ROLE_LABELS,
   type Dataset, type Filters, type KpiKey, type MultiRole, type Ticket,
 } from "@/lib/tickets";
 
 const DATA_URL = "/data/tickets.xlsx";
+interface LoadError { message: string; missing: string[]; headers: string[]; file: string }
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -37,7 +39,7 @@ function Dashboard() {
   const [ds, setDs] = useState<Dataset | null>(null);
   const [buf, setBuf] = useState<{ data: ArrayBuffer; name: string; source: "server" | "upload" } | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<LoadError | null>(null);
   const [applied, setApplied] = useState<Filters>(EMPTY_FILTERS);
   const [draft, setDraft] = useState<Filters>(EMPTY_FILTERS);
   const [collapsed, setCollapsed] = useState(false);
@@ -45,48 +47,83 @@ function Dashboard() {
   const fileRef = useRef<HTMLInputElement>(null);
   const tableRef = useRef<HTMLDivElement>(null);
 
-  const parse = useCallback((data: ArrayBuffer, name: string, sheet?: string) => {
+  // Single source of truth: `ds` is the active dataset. It is only replaced after a file parses and validates.
+  const activate = useCallback((d: Dataset, data: ArrayBuffer, source: "server" | "upload") => {
+    setDs(d);
+    setBuf({ data, name: d.fileName, source });
+    setSelected(null);
+    setApplied((f) => pruneFilters(f, d));
+    setDraft((f) => pruneFilters(f, d));
+    setError(null);
+  }, []);
+
+  const tryParse = useCallback((data: ArrayBuffer, name: string, sheet?: string): Dataset | null => {
     try {
-      const d = parseWorkbook(data, name, sheet);
-      setDs(d);
-      setError(null);
-      return d;
+      return parseWorkbook(data, name, sheet);
     } catch (e) {
-      setError(`Could not read the Excel file: ${(e as Error).message}`);
+      const err = e instanceof ExcelReadError ? e : null;
+      setError({
+        message: err?.message ?? "Could not read the Excel file. Please check the Excel format and required columns.",
+        missing: err?.missingColumns ?? [],
+        headers: err?.detectedHeaders ?? [],
+        file: name,
+      });
       return null;
     }
   }, []);
 
-  const loadServer = useCallback(async (notify = false) => {
+  const loadServer = useCallback(async (notify = false, sheet?: string) => {
     setLoading(true);
     try {
       const res = await fetch(`${DATA_URL}?t=${Date.now()}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`Data file not found at public${DATA_URL} (HTTP ${res.status})`);
+      if (!res.ok) throw new Error();
       const data = await res.arrayBuffer();
-      setBuf({ data, name: "tickets.xlsx", source: "server" });
-      const d = parse(data, "tickets.xlsx", ds?.sheet);
-      if (d && notify) toast.success(`Reloaded ${d.tickets.length.toLocaleString("en-IN")} tickets`);
-    } catch (e) {
-      setError((e as Error).message);
+      const d = tryParse(data, "tickets.xlsx", sheet);
+      if (d) {
+        activate(d, data, "server");
+        if (notify) toast.success(`Excel loaded successfully — ${d.tickets.length.toLocaleString("en-IN")} records`, { description: `File: ${d.fileName} · Loaded: ${d.loadedAt.toLocaleString("en-IN")}` });
+      }
+    } catch {
+      setError({ message: `The default data file could not be loaded (public${DATA_URL}). Use “Open Excel” to load a file.`, missing: [], headers: [], file: "tickets.xlsx" });
     } finally {
       setLoading(false);
     }
-  }, [parse, ds?.sheet]);
+  }, [tryParse, activate]);
 
   useEffect(() => { loadServer(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
   const onUpload = async (f: File) => {
     setLoading(true);
-    const data = await f.arrayBuffer();
-    setBuf({ data, name: f.name, source: "upload" });
-    const d = parse(data, f.name);
-    setLoading(false);
-    if (d) { toast.success(`Loaded ${d.tickets.length.toLocaleString("en-IN")} tickets from ${f.name}`); setApplied(EMPTY_FILTERS); setDraft(EMPTY_FILTERS); }
+    try {
+      const data = await f.arrayBuffer();
+      const d = tryParse(data, f.name);
+      if (d) {
+        activate(d, data, "upload");
+        toast.success(`Excel loaded successfully — ${d.tickets.length.toLocaleString("en-IN")} records`, { description: `File: ${f.name} · Loaded: ${d.loadedAt.toLocaleString("en-IN")}` });
+      } else {
+        toast.error(ds ? "Upload failed — the previous data is still shown." : "Upload failed.");
+      }
+    } catch {
+      setError({ message: "Could not read the selected file.", missing: [], headers: [], file: f.name });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onSheet = (sheet: string) => {
+    if (!buf) return;
+    const d = tryParse(buf.data, buf.name, sheet);
+    if (d) { activate(d, buf.data, buf.source); toast.success(`Worksheet “${sheet}” loaded — ${d.tickets.length.toLocaleString("en-IN")} records`); }
   };
 
   const reload = () => {
-    if (buf?.source === "upload") { toast.info("Showing an uploaded file — choose it again with “Open Excel” to reload it, or reloading the default data file."); }
-    loadServer(true);
+    if (buf?.source === "upload") {
+      // Never silently fall back to the default file while an uploaded file is active.
+      const d = tryParse(buf.data, buf.name, ds?.sheet);
+      if (d) { activate(d, buf.data, "upload"); toast.info(`Re-read ${buf.name} — ${d.tickets.length.toLocaleString("en-IN")} records. If you edited the file, open it again with “Open Excel”.`); }
+      return;
+    }
+    loadServer(true, ds?.sheet);
   };
 
   const rows = useMemo(() => (ds ? applyFilters(ds.tickets, applied) : []), [ds, applied]);
@@ -112,7 +149,7 @@ function Dashboard() {
   if (!ds) return (
     <Centered>
       <AlertTriangle className="h-6 w-6 text-destructive" />
-      <p className="max-w-md text-center">{error ?? "No data loaded."}</p>
+      <div className="max-w-xl">{error ? <ErrorDetails e={error} /> : <p className="text-center">No data loaded.</p>}</div>
       <Button onClick={() => fileRef.current?.click()}><Upload className="h-4 w-4" /> Open Excel file</Button>
       <input ref={fileRef} type="file" accept=".xlsx,.xls,.xlsm,.csv" hidden onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])} />
     </Centered>
@@ -144,10 +181,10 @@ function Dashboard() {
           <div className="ml-auto flex items-center gap-2">
             <span className="hidden items-center gap-1 text-xs text-muted-foreground lg:flex">
               <FileSpreadsheet className="h-3.5 w-3.5" />
-              {buf?.name} · {ds.sheet} · loaded {ds.loadedAt.toLocaleTimeString("en-IN")}
+              {buf?.name} · {ds.sheet} · {ds.tickets.length.toLocaleString("en-IN")} records · loaded {ds.loadedAt.toLocaleString("en-IN")}
             </span>
             {ds.sheetNames.length > 1 && (
-              <select value={ds.sheet} onChange={(e) => buf && parse(buf.data, buf.name, e.target.value)} className="h-8 rounded border bg-card px-2 text-xs" aria-label="Worksheet">
+              <select value={ds.sheet} onChange={(e) => onSheet(e.target.value)} className="h-8 rounded border bg-card px-2 text-xs" aria-label="Worksheet">
                 {ds.sheetNames.map((s) => <option key={s}>{s}</option>)}
               </select>
             )}
@@ -158,7 +195,7 @@ function Dashboard() {
         </header>
 
         <main className="space-y-4 p-5">
-          {error && <Notice tone="error">{error}</Notice>}
+          {error && <Notice tone="error"><ErrorDetails e={error} /> <span className="text-xs">The previously loaded data is still shown below.</span></Notice>}
           {ds.missing.length > 0 && (
             <Notice tone="warn">
               Columns not found in sheet “{ds.sheet}”: <b>{ds.missing.map((m) => ROLE_LABELS[m]).join(", ")}</b>. Related filters and charts are hidden.
@@ -176,7 +213,7 @@ function Dashboard() {
               <span>Product, Engineer, Zone, Branch &amp; TAT Analysis</span>
               <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${more ? "rotate-180" : ""}`} />
             </button>
-            {more && <div className="border-t p-4"><Charts ds={ds} rows={rows} onDrill={onDrill} part="more" /></div>}
+            {more && <div className="space-y-4 border-t p-4"><GroupAnalysis ds={ds} rows={rows} selected={applied.multi} onPick={onDrill} /><Charts ds={ds} rows={rows} onDrill={onDrill} part="more" /></div>}
           </div>
           <div ref={tableRef} className="scroll-mt-16 space-y-4">
             <SelectionSummary rows={rows} applied={applied} onChange={commit} onClear={() => commit(EMPTY_FILTERS)} />
@@ -247,6 +284,17 @@ function Kpi({ icon: Icon, label, value, sub, tone, active, onClick }: KpiProps)
       {sub && <div className="mt-1 truncate text-[11px] text-muted-foreground" title={sub}>{sub}</div>}
       {active && <span className="mt-2 inline-block rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-primary">Selected</span>}
     </button>
+  );
+}
+
+function ErrorDetails({ e }: { e: LoadError }) {
+  return (
+    <div className="space-y-1">
+      <div className="font-medium">{e.message}</div>
+      <div className="text-xs">File: {e.file}</div>
+      {e.missing.length > 0 && <div className="text-xs">Missing column(s): <b>{e.missing.join(", ")}</b></div>}
+      {e.headers.length > 0 && <div className="text-xs">Detected headers: {e.headers.join(" · ")}</div>}
+    </div>
   );
 }
 
