@@ -14,7 +14,7 @@ import { GroupAnalysis } from "@/components/dash/GroupAnalysis";
 import { AgingChart } from "@/components/dash/AgingChart";
 import { SelectionSummary } from "@/components/dash/SelectionSummary";
 import {
-  applyBase, applyFilters, EMPTY_FILTERS, ExcelReadError, pruneFilters, parseWorkbook, periodRange, kpiMatch, ROLE_LABELS,
+  applyBase, applyFilters, EMPTY_FILTERS, istToday, ExcelReadError, pruneFilters, parseWorkbook, periodRange, kpiMatch, ROLE_LABELS,
   type Dataset, type Filters, type KpiKey, type MultiRole, type Ticket,
 } from "@/lib/tickets";
 
@@ -166,7 +166,7 @@ function Dashboard() {
         </div>
         {!collapsed && (
           <div className="h-[calc(100vh-3.5rem)] overflow-y-auto p-3">
-            <FilterPanel ds={ds} draft={draft} setDraft={setDraft} dirty={dirty} onApply={() => setApplied(draft)} onReset={() => setDraft(applied)} onClear={() => commit(EMPTY_FILTERS)} />
+            <FilterPanel ds={ds} draft={draft} setDraft={setDraft} dirty={dirty} currentYM={istToday()} onApply={() => setApplied(draft)} onReset={() => setDraft(applied)} onClear={() => commit(EMPTY_FILTERS)} />
           </div>
         )}
       </aside>
