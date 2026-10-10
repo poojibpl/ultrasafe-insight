@@ -2,13 +2,15 @@ import * as XLSX from "xlsx";
 
 export type Role =
   | "ticketId" | "customer" | "created" | "closed" | "status" | "type" | "product"
-  | "category" | "serial" | "engineer" | "branch" | "zone" | "warranty" | "city" | "state" | "days";
+  | "category" | "serial" | "engineer" | "branch" | "zone" | "warranty" | "city" | "state" | "days"
+  | "fcn" | "fcnClosed" | "crmClosed";
 
 export const ROLE_LABELS: Record<Role, string> = {
   ticketId: "Ticket ID", customer: "Customer / Hospital", created: "System Ticket Creation Date",
   closed: "Ticket Closed Date", status: "Ticket Status", type: "Ticket Type", product: "Product / Model",
   category: "Product Category", serial: "Serial Number", engineer: "BPL Engineer", branch: "Branch",
   zone: "Zone", warranty: "Warranty", city: "City", state: "State", days: "No of Days",
+  fcn: "FCN Number", fcnClosed: "FCN Closed Date", crmClosed: "CRM Timeline Closure Date",
 };
 
 // Header aliases (normalized: lowercase, alphanumerics only). First match wins.
@@ -28,6 +30,9 @@ const ALIASES: Record<Role, string[]> = {
   warranty: ["warranty", "warrantystatus"],
   city: ["city"],
   state: ["state"],
+  fcn: ["fcnno", "fcnnumber", "fcnid", "fcnref", "fcnreference", "fcn"],
+  fcnClosed: ["fcncloseddate", "fcnclosuredate", "fcnclosedate", "fcnclosedon", "fcncompletiondate", "fcndate"],
+  crmClosed: ["crmtimelineclosuredate", "crmtimelineclosedate", "crmtimelinecloseddate", "crmtimelinedate", "crmclosuredate", "crmcloseddate", "crmtimeline"],
   days: ["noofdays", "noofday", "numberofdays", "ageingdays", "agingdays", "ageing", "aging", "days"],
 };
 
@@ -42,6 +47,17 @@ export interface Ticket {
   /** Aging in days: "No of Days" column if present, else computed (open: today − created, closed: TAT). */
   age: number | null;
   statusGroup: "Open" | "Closed" | "Pending / Other";
+  /** FCN-related: FCN number filled, FCN date filled, or ticket type mentions FCN. */
+  isFcn: boolean;
+  fcnClosed: Date | null;
+  crmClosed: Date | null;
+  /** FCN Closed Date − Creation Date (never mixed with normal-call TAT). */
+  fcnTat: number | null;
+  /** CRM Timeline Closure Date − Creation Date. */
+  crmTat: number | null;
+  /** Raw text in an FCN/CRM date cell that could not be read as a date. */
+  fcnInvalid: boolean;
+  crmInvalid: boolean;
   dims: Partial<Record<Role, string | null>>;
 }
 export interface Dataset {
@@ -158,9 +174,10 @@ export function parseWorkbook(buf: ArrayBuffer, fileName: string, preferredSheet
     columns.forEach((c, k) => { o[c] = r[colIndex[k]!] ?? null; });
     return o;
   });
-  const dateColumns = columns.filter((c) => /date/i.test(c));
+  const dateColumns = columns.filter((c) => /date|crm\s*timeline/i.test(c));
   const mapping = mapColumns(columns);
-  const missing = (Object.keys(ALIASES) as Role[]).filter((r) => !mapping[r] && r !== "days");
+  const OPTIONAL: Role[] = ["days", "fcn", "fcnClosed", "crmClosed"];
+  const missing = (Object.keys(ALIASES) as Role[]).filter((r) => !mapping[r] && !OPTIONAL.includes(r));
   const required: Role[] = ["ticketId", "status"];
   const reqMissing = required.filter((r) => !mapping[r]);
   if (reqMissing.length) {
@@ -191,6 +208,11 @@ export function parseWorkbook(buf: ArrayBuffer, fileName: string, preferredSheet
       const d = Math.round((closed.getTime() - created.getTime()) / 86400000);
       if (d >= 0) tat = d;
     }
+    const dateOf = (role: Role) => { const v = get(role); return v instanceof Date ? v : null; };
+    const diff = (end: Date | null) => { if (!created || !end) return null; const d = Math.round((end.getTime() - created.getTime()) / 86400000); return d >= 0 ? d : null; };
+    const fcnClosed = dateOf("fcnClosed"), crmClosed = dateOf("crmClosed");
+    const fcnInvalid = !!mapping.fcnClosed && get("fcnClosed") != null && !fcnClosed;
+    const crmInvalid = !!mapping.crmClosed && get("crmClosed") != null && !crmClosed;
     const statusGroup = classifyStatus(mapping.status ? cleanStr(get("status")) : null);
     let age: number | null = null;
     if (mapping.days) {
@@ -201,11 +223,12 @@ export function parseWorkbook(buf: ArrayBuffer, fileName: string, preferredSheet
     else if (created) { const d = Math.floor((today.getTime() - created.getTime()) / 86400000); age = d >= 0 ? d : null; }
     const dims: Ticket["dims"] = {};
     (Object.keys(ALIASES) as Role[]).forEach((role) => {
-      if (role !== "created" && role !== "closed" && role !== "days") dims[role] = mapping[role] ? cleanStr(get(role)) : null;
+      if (!["created", "closed", "days", "fcnClosed", "crmClosed"].includes(role)) dims[role] = mapping[role] ? cleanStr(get(role)) : null;
     });
     const id = dims.ticketId ?? null;
     if (id) { const c = seen.get(id) || 0; if (c >= 1) duplicateIds++; seen.set(id, c + 1); }
-    tickets.push({ _idx: i, raw, id, created, closed, tat, age, statusGroup, dims });
+    const isFcn = !!dims.fcn || !!fcnClosed || fcnInvalid || /\bfcn\b/i.test(dims.type ?? "");
+    tickets.push({ _idx: i, raw, id, created, closed, tat, age, statusGroup, dims, isFcn, fcnClosed, crmClosed, fcnTat: diff(fcnClosed), crmTat: diff(crmClosed), fcnInvalid, crmInvalid });
   });
   if (!tickets.length) throw new ExcelReadError(`Sheet “${sheet}” has headers but no ticket rows.`, columns);
   return { fileName, sheetNames, sheet, columns, dateColumns, mapping, missing, tickets, duplicateIds, loadedAt: new Date() };
@@ -217,6 +240,9 @@ export type MultiRole = (typeof MULTI_ROLES)[number];
 export interface Filters {
   ticketId: string;
   serial: string;
+  /** Creation-date period: "" = All Time. month "" = all months of the year, else "01".."12". */
+  year: string;
+  month: string;
   multi: Partial<Record<MultiRole, string[]>>;
   statusGroup: string[];
   createdFrom: string; createdTo: string;
@@ -238,6 +264,12 @@ export const ageBucketOf = (n: number | null) => (n == null ? null : AGE_BUCKETS
 export const ageLevel = (n: number | null) => ageBucketOf(n)?.level ?? 0;
 /** Reference window for the "Created in Period" KPI: the date filter, else the last 30 days of data. */
 export function periodRange(rows: Ticket[], f: Filters): { from: number | null; to: number | null; label: string } {
+  if (f.year) {
+    const y = +f.year, m = f.month ? +f.month : 0;
+    const from = new Date(y, m ? m - 1 : 0, 1).getTime();
+    const to = (m ? new Date(y, m, 1) : new Date(y + 1, 0, 1)).getTime() - 1;
+    return { from, to, label: m ? `${MONTHS[m - 1]} ${y}` : `Year ${y}` };
+  }
   if (f.createdFrom || f.createdTo) {
     return { from: dayStart(f.createdFrom), to: dayEnd(f.createdTo), label: `${f.createdFrom ? fmtDate(new Date(f.createdFrom + "T00:00")) : "start"} → ${f.createdTo ? fmtDate(new Date(f.createdTo + "T00:00")) : "latest"}` };
   }
@@ -260,7 +292,7 @@ export function kpiMatch(t: Ticket, k: KpiKey, period?: { from: number | null; t
     }
   }
 }
-export const EMPTY_FILTERS: Filters = { ticketId: "", serial: "", multi: {}, statusGroup: [], createdFrom: "", createdTo: "", closedFrom: "", closedTo: "", kpi: null, ageBucket: null };
+export const EMPTY_FILTERS: Filters = { ticketId: "", serial: "", year: "", month: "", multi: {}, statusGroup: [], createdFrom: "", createdTo: "", closedFrom: "", closedTo: "", kpi: null, ageBucket: null };
 export const BLANK = "(Blank)";
 
 const dayStart = (s: string) => (s ? new Date(s + "T00:00:00").getTime() : null);
@@ -289,6 +321,10 @@ export function applyBase(ts: Ticket[], f: Filters): Ticket[] {
     if (snQ && !(t.dims.serial || "").toLowerCase().includes(snQ)) return false;
     if (sg.size && !sg.has(t.statusGroup)) return false;
     for (const [k, s] of sets) if (!s.has(t.dims[k] ?? BLANK)) return false;
+    if (f.year) {
+      if (!t.created || t.created.getFullYear() !== +f.year) return false;
+      if (f.month && t.created.getMonth() + 1 !== +f.month) return false;
+    }
     if (cf != null || ct != null) {
       if (!t.created) return false;
       const v = t.created.getTime();
@@ -386,3 +422,29 @@ export function groupStats(ts: Ticket[], role: Role) {
     };
   }).sort((a, b) => b.total - a.total);
 }
+
+export const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+/** Today's calendar date in India (Asia/Kolkata), independent of the viewer's computer clock zone. */
+export function istToday(now = new Date()) {
+  const p = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
+  const g = (t: string) => p.find((x) => x.type === t)?.value ?? "";
+  return { year: g("year"), month: g("month"), day: g("day") };
+}
+/** Default view: current IST month & year (even if it has no records — the UI then says so). */
+export function defaultFilters(now = new Date()): Filters {
+  const t = istToday(now);
+  return { ...EMPTY_FILTERS, year: t.year, month: t.month };
+}
+/** Years (newest first) and, per year, months that have tickets by creation date. */
+export function periodOptions(ts: Ticket[]) {
+  const m = new Map<string, Map<string, number>>();
+  for (const t of ts) {
+    if (!t.created) continue;
+    const y = String(t.created.getFullYear()), mo = String(t.created.getMonth() + 1).padStart(2, "0");
+    if (!m.has(y)) m.set(y, new Map());
+    const ym = m.get(y)!; ym.set(mo, (ym.get(mo) || 0) + 1);
+  }
+  return m;
+}
+export const uniqueIds = (ts: Ticket[]) => new Set(ts.map((t) => t.id).filter(Boolean)).size;
