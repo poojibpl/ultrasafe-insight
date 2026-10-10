@@ -185,7 +185,7 @@ export function TrendsView({ ds, rows, ym }: { ds: Dataset; rows: Ticket[]; ym: 
   const closedCur = rows.filter((t) => t.closed && monthKey(t.closed) === cur).length;
   const delta = prevRows.length ? ((curRows.length - prevRows.length) / prevRows.length) * 100 : null;
   const types = countBy(curRows, (t) => t.dims.type ?? null);
-  const last = data.length ? String(data[data.length - 1]!.key) : null;
+  const last = data.length ? String(data[data.length - 1]!["key"]) : null;
   if (!m.created) return <MissingNote what="Trends need the System Ticket Creation Date column." />;
   return (
     <div className="space-y-4">
