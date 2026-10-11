@@ -34,3 +34,9 @@ With several sheets, the best-matching sheet is chosen and a worksheet selector 
 - **Open Excel** replaces all dashboard data with the new file only after it has been read and checked. Old rows are never mixed in.
 - Required columns: `Ticket ID` and `Ticket Status`. If either is missing, the previous data stays on screen and the error lists the missing and detected headers.
 - **Reload Data** re-reads the file currently in use; it never switches back to `tickets.xlsx` while an uploaded file is active.
+
+## Latest upload, sections and period
+
+- The latest Excel opened with **Open Excel** is saved in this browser and loads automatically next time; **Reload Data** re-reads it. **Use default file** forgets it and loads `tickets.xlsx`. (Saved per browser/computer only.)
+- The dashboard opens on the current month in India time (by System Ticket Creation Date). If that month has no tickets, it says so. Choose **All Time** for history. **Reset** = back to current month; **Clear All** = All Time, no filters.
+- Sections: **Overview**, **Normal Service Calls** (TAT = Ticket Closed Date − creation date), **FCN Analysis** (uses FCN Closed Date and CRM Timeline Closure Date separately, only if those columns exist), **Current Trends**.

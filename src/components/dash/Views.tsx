@@ -176,7 +176,8 @@ export function FcnView({ ds, rows }: { ds: Dataset; rows: Ticket[] }) {
 /** Trend across all months (Year/Month filter ignored here so the trend has context). */
 export function TrendsView({ ds, rows, ym }: { ds: Dataset; rows: Ticket[]; ym: { year: string; month: string } }) {
   const m = ds.mapping;
-  const data = useMemo(() => monthlyMulti(rows, { Created: (t) => t.created, Closed: (t) => t.closed }), [rows]);
+  const all = useMemo(() => monthlyMulti(rows, { Created: (t) => t.created, Closed: (t) => t.closed }), [rows]);
+  const data = all.slice(-18);
   const cur = `${ym.year}-${ym.month}`;
   const prevD = new Date(+ym.year, +ym.month - 2, 1);
   const prev = monthKey(prevD);
@@ -185,7 +186,7 @@ export function TrendsView({ ds, rows, ym }: { ds: Dataset; rows: Ticket[]; ym: 
   const closedCur = rows.filter((t) => t.closed && monthKey(t.closed) === cur).length;
   const delta = prevRows.length ? ((curRows.length - prevRows.length) / prevRows.length) * 100 : null;
   const types = countBy(curRows, (t) => t.dims.type ?? null);
-  const last = data.length ? String(data[data.length - 1]!["key"]) : null;
+  const last = all.length ? String(all[all.length - 1]!["key"]) : null;
   if (!m.created) return <MissingNote what="Trends need the System Ticket Creation Date column." />;
   return (
     <div className="space-y-4">
@@ -196,7 +197,7 @@ export function TrendsView({ ds, rows, ym }: { ds: Dataset; rows: Ticket[]; ym: 
         <Stat label={`Closed · ${monthLabel(cur)}`} value={closedCur} tone="success" sub={`By “${m.closed ?? "closed date"}”`} />
       </div>
       {last && last < cur && <p className="text-xs text-muted-foreground">Latest month with data in this file: {monthLabel(last)}. Newer months appear after the Excel is updated and reloaded.</p>}
-      <ChartCard title="Monthly Created vs Closed" subtitle="All months in the file · other sidebar filters applied, Year/Month ignored">
+      <ChartCard title="Monthly Created vs Closed" subtitle="Last 18 months with data · other sidebar filters applied, Year/Month ignored">
         {!data.length ? <MissingNote what="No dated records." /> : (
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={data}>
