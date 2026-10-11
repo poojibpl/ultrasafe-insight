@@ -13,12 +13,16 @@ import { TicketDetail } from "@/components/dash/TicketDetail";
 import { GroupAnalysis } from "@/components/dash/GroupAnalysis";
 import { AgingChart } from "@/components/dash/AgingChart";
 import { SelectionSummary } from "@/components/dash/SelectionSummary";
+import { FcnView, NormalSummary, TrendsView } from "@/components/dash/Views";
+import { clearLatest, loadLatest, saveLatest } from "@/lib/latestUpload";
 import {
-  applyBase, applyFilters, EMPTY_FILTERS, istToday, ExcelReadError, pruneFilters, parseWorkbook, periodRange, kpiMatch, ROLE_LABELS,
+  applyBase, applyFilters, EMPTY_FILTERS, istToday, defaultFilters, uniqueIds, MONTHS, ExcelReadError, pruneFilters, parseWorkbook, periodRange, kpiMatch, ROLE_LABELS,
   type Dataset, type Filters, type KpiKey, type MultiRole, type Ticket,
 } from "@/lib/tickets";
 
 const DATA_URL = "/data/tickets.xlsx";
+type View = "overview" | "normal" | "fcn" | "trends";
+const VIEWS: [View, string][] = [["overview", "Overview"], ["normal", "Normal Service Calls"], ["fcn", "FCN Analysis"], ["trends", "Current Trends"]];
 interface LoadError { message: string; missing: string[]; headers: string[]; file: string }
 
 export const Route = createFileRoute("/")({
@@ -40,8 +44,9 @@ function Dashboard() {
   const [buf, setBuf] = useState<{ data: ArrayBuffer; name: string; source: "server" | "upload" } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<LoadError | null>(null);
-  const [applied, setApplied] = useState<Filters>(EMPTY_FILTERS);
-  const [draft, setDraft] = useState<Filters>(EMPTY_FILTERS);
+  const [applied, setApplied] = useState<Filters>(() => defaultFilters());
+  const [draft, setDraft] = useState<Filters>(() => defaultFilters());
+  const [view, setView] = useState<View>("overview");
   const [collapsed, setCollapsed] = useState(false);
   const [selected, setSelected] = useState<Ticket | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -90,7 +95,25 @@ function Dashboard() {
     }
   }, [tryParse, activate]);
 
-  useEffect(() => { loadServer(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  // Startup: the latest successfully uploaded workbook (saved in this browser) wins over the default file.
+  const loadSaved = useCallback(async (notify: boolean) => {
+    setLoading(true);
+    try {
+      const saved = await loadLatest();
+      if (!saved) return false;
+      const d = tryParse(saved.data, saved.name, saved.sheet);
+      if (!d) return true; // keep error visible; never fall back silently
+      activate(d, saved.data, "upload");
+      if (notify) toast.success(`Reloaded ${saved.name} — ${d.tickets.length.toLocaleString("en-IN")} records`, { description: `Uploaded ${new Date(saved.savedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST` });
+      return true;
+    } finally { setLoading(false); }
+  }, [tryParse, activate]);
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current) return; started.current = true;
+    loadSaved(false).then((had) => { if (!had) loadServer(); });
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, []);
 
   const onUpload = async (f: File) => {
     setLoading(true);
@@ -99,6 +122,8 @@ function Dashboard() {
       const d = tryParse(data, f.name);
       if (d) {
         activate(d, data, "upload");
+        const ok = await saveLatest({ name: f.name, data, sheet: d.sheet, savedAt: Date.now() });
+        if (!ok) toast.warning("Loaded, but this browser could not save the file for next time.");
         toast.success(`Excel loaded successfully — ${d.tickets.length.toLocaleString("en-IN")} records`, { description: `File: ${f.name} · Loaded: ${d.loadedAt.toLocaleString("en-IN")}` });
       } else {
         toast.error(ds ? "Upload failed — the previous data is still shown." : "Upload failed.");
@@ -113,16 +138,11 @@ function Dashboard() {
   const onSheet = (sheet: string) => {
     if (!buf) return;
     const d = tryParse(buf.data, buf.name, sheet);
-    if (d) { activate(d, buf.data, buf.source); toast.success(`Worksheet “${sheet}” loaded — ${d.tickets.length.toLocaleString("en-IN")} records`); }
+    if (d) { activate(d, buf.data, buf.source); if (buf.source === "upload") saveLatest({ name: buf.name, data: buf.data, sheet, savedAt: Date.now() }); toast.success(`Worksheet “${sheet}” loaded — ${d.tickets.length.toLocaleString("en-IN")} records`); }
   };
 
   const reload = () => {
-    if (buf?.source === "upload") {
-      // Never silently fall back to the default file while an uploaded file is active.
-      const d = tryParse(buf.data, buf.name, ds?.sheet);
-      if (d) { activate(d, buf.data, "upload"); toast.info(`Re-read ${buf.name} — ${d.tickets.length.toLocaleString("en-IN")} records. If you edited the file, open it again with “Open Excel”.`); }
-      return;
-    }
+    if (buf?.source === "upload") { loadSaved(true); return; } // latest saved upload, never the old default
     loadServer(true, ds?.sheet);
   };
 
@@ -130,6 +150,9 @@ function Dashboard() {
   const baseRows = useMemo(() => (ds ? applyBase(ds.tickets, applied) : []), [ds, applied]);
   const agingRows = useMemo(() => (ds ? applyFilters(ds.tickets, { ...applied, ageBucket: null }) : []), [ds, applied]);
   const [more, setMore] = useState(false);
+  const trendRows = useMemo(() => (ds ? applyBase(ds.tickets, { ...applied, year: "", month: "" }) : []), [ds, applied]);
+  const today = istToday();
+  const useDefault = async () => { await clearLatest(); loadServer(true); };
   const dirty = JSON.stringify(draft) !== JSON.stringify(applied);
 
   const commit = (f: Filters) => { setApplied(f); setDraft(f); };
@@ -166,7 +189,7 @@ function Dashboard() {
         </div>
         {!collapsed && (
           <div className="h-[calc(100vh-3.5rem)] overflow-y-auto p-3">
-            <FilterPanel ds={ds} draft={draft} setDraft={setDraft} dirty={dirty} currentYM={istToday()} onApply={() => setApplied(draft)} onReset={() => setDraft(applied)} onClear={() => commit(EMPTY_FILTERS)} />
+            <FilterPanel ds={ds} draft={draft} setDraft={setDraft} dirty={dirty} currentYM={istToday()} onApply={() => setApplied(draft)} onReset={() => commit(defaultFilters())} onClear={() => commit(EMPTY_FILTERS)} />
           </div>
         )}
       </aside>
@@ -181,20 +204,34 @@ function Dashboard() {
           <div className="ml-auto flex items-center gap-2">
             <span className="hidden items-center gap-1 text-xs text-muted-foreground lg:flex">
               <FileSpreadsheet className="h-3.5 w-3.5" />
-              {buf?.name} · {ds.sheet} · {ds.tickets.length.toLocaleString("en-IN")} records · loaded {ds.loadedAt.toLocaleString("en-IN")}
+              {buf?.name} · {ds.sheet} · {ds.tickets.length.toLocaleString("en-IN")} records · {uniqueIds(ds.tickets).toLocaleString("en-IN")} unique IDs · loaded {ds.loadedAt.toLocaleString("en-IN")}
             </span>
             {ds.sheetNames.length > 1 && (
               <select value={ds.sheet} onChange={(e) => onSheet(e.target.value)} className="h-8 rounded border bg-card px-2 text-xs" aria-label="Worksheet">
                 {ds.sheetNames.map((s) => <option key={s}>{s}</option>)}
               </select>
             )}
+            {buf?.source === "upload" && <Button variant="ghost" size="sm" onClick={useDefault} title="Forget the saved upload and load the default tickets.xlsx">Use default file</Button>}
             <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}><Upload className="h-4 w-4" /> Open Excel</Button>
             <Button size="sm" onClick={reload} disabled={loading}><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Reload Data</Button>
             <input ref={fileRef} type="file" accept=".xlsx,.xls,.xlsm,.csv" hidden onChange={(e) => { e.target.files?.[0] && onUpload(e.target.files[0]); e.target.value = ""; }} />
           </div>
         </header>
 
+        <nav className="flex gap-1 border-b bg-card px-5" aria-label="Sections">
+          {VIEWS.map(([k, label]) => (
+            <button key={k} onClick={() => setView(k)} aria-current={view === k ? "page" : undefined}
+              className={`border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${view === k ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}>{label}</button>
+          ))}
+        </nav>
         <main className="space-y-4 p-5">
+          {loading && <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Reading Excel…</div>}
+          {applied.year && view !== "trends" && (
+            <div className="text-xs text-muted-foreground">Period: <b className="text-foreground">{applied.month ? `${MONTHS[+applied.month - 1]} ${applied.year}` : `Year ${applied.year}`}</b> (by System Ticket Creation Date · today {today.day}-{today.month}-{today.year} IST)</div>
+          )}
+          {applied.year && !baseRows.length && (
+            <Notice tone="warn">No records for {applied.month ? `${MONTHS[+applied.month - 1]} ${applied.year}` : applied.year} in “{buf?.name}”. Choose another month/year or “All Time” in the sidebar.</Notice>
+          )}
           {error && <Notice tone="error"><ErrorDetails e={error} /> <span className="text-xs">The previously loaded data is still shown below.</span></Notice>}
           {ds.missing.length > 0 && (
             <Notice tone="warn">
@@ -203,6 +240,7 @@ function Dashboard() {
           )}
           {ds.duplicateIds > 0 && <Notice tone="warn">{ds.duplicateIds} rows share a Ticket ID with another row. All rows are kept and counted as they appear in the Excel.</Notice>}
 
+          {view === "overview" && <>
           <Kpis ds={ds} rows={baseRows} applied={applied} onSelect={onKpi} />
           <Charts ds={ds} rows={rows} onDrill={onDrill} part="summary" />
           {(ds.mapping.days || ds.mapping.created) && ds.mapping.status && (
@@ -219,6 +257,27 @@ function Dashboard() {
             <SelectionSummary rows={rows} applied={applied} onChange={commit} onClear={() => commit(EMPTY_FILTERS)} />
             <TicketTable ds={ds} rows={rows} onSelect={setSelected} />
           </div>
+          </>}
+          {view === "normal" && (() => {
+            const nr = rows.filter((t) => !t.isFcn), na = agingRows.filter((t) => !t.isFcn);
+            return <>
+              <NormalSummary ds={ds} rows={nr} />
+              {(ds.mapping.days || ds.mapping.created) && ds.mapping.status && <AgingChart ds={ds} rows={na} active={applied.ageBucket} onSelect={(b) => commit({ ...applied, ageBucket: b })} />}
+              <Charts ds={ds} rows={nr} onDrill={onDrill} part="more" />
+              <div ref={tableRef} className="scroll-mt-16 space-y-4">
+                <SelectionSummary rows={nr} applied={applied} onChange={commit} onClear={() => commit(EMPTY_FILTERS)} />
+                <TicketTable ds={ds} rows={nr} onSelect={setSelected} />
+              </div>
+            </>;
+          })()}
+          {view === "fcn" && (() => {
+            const fr = rows.filter((t) => t.isFcn);
+            return <>
+              <FcnView ds={ds} rows={fr} />
+              {fr.length > 0 && <div ref={tableRef}><TicketTable ds={ds} rows={fr} onSelect={setSelected} /></div>}
+            </>;
+          })()}
+          {view === "trends" && <TrendsView ds={ds} rows={trendRows} ym={today} />}
         </main>
       </div>
       <TicketDetail ds={ds} ticket={selected} onClose={() => setSelected(null)} />
