@@ -11,3 +11,5 @@
 
 - The active dataset (`ds` in `src/routes/index.tsx`) is the single source of truth; it is replaced only after `parseWorkbook` succeeds, never merged; why: uploads must fully replace old data and failures must keep the last valid data.
 - Columns are mapped to roles by header aliases; missing roles hide features instead of crashing; why: Excel structure may change.
+- The latest successful upload is kept in browser IndexedDB (`src/lib/latestUpload.ts`, single "latest" key) and wins over `public/data/tickets.xlsx` on startup and Reload; why: users must never see an older workbook after uploading a newer one, and no backend is enabled.
+- FCN and CRM timeline durations are computed from their own date columns, separately from normal-call TAT; why: their closure concepts differ and must never be mixed.
