@@ -3,14 +3,15 @@ import * as XLSX from "xlsx";
 export type Role =
   | "ticketId" | "customer" | "created" | "closed" | "status" | "type" | "product"
   | "category" | "serial" | "engineer" | "branch" | "zone" | "warranty" | "city" | "state" | "days"
-  | "fcn" | "fcnClosed" | "crmClosed";
+  | "fcn" | "fcnClosed" | "crmClosed" | "fcnAttached" | "serviceTat";
 
 export const ROLE_LABELS: Record<Role, string> = {
-  ticketId: "Ticket ID", customer: "Customer / Hospital", created: "System Ticket Creation Date",
-  closed: "Ticket Closed Date", status: "Ticket Status", type: "Ticket Type", product: "Product / Model",
+  ticketId: "Ticket ID", customer: "Customer / Hospital", created: "Ticket Creation Date",
+  closed: "Ticket Closed Date", status: "New Ticket Status", type: "New Ticket Type", product: "Product / Model",
   category: "Product Category", serial: "Serial Number", engineer: "BPL Engineer", branch: "Branch",
   zone: "Zone", warranty: "Warranty", city: "City", state: "State", days: "No of Days",
-  fcn: "FCN Number", fcnClosed: "FCN Closed Date", crmClosed: "CRM Timeline Closure Date",
+  fcn: "FCN Number", fcnClosed: "Call Closed Date as per FCN", crmClosed: "CRM Timeline Closure Date",
+  fcnAttached: "FCN ATTACHED OR NOT", serviceTat: "TAT Service",
 };
 
 // Header aliases (normalized: lowercase, alphanumerics only). First match wins.
@@ -19,8 +20,8 @@ const ALIASES: Record<Role, string[]> = {
   customer: ["customername", "customer", "hospitalname", "hospital", "accountname"],
   created: ["systemticketcreationdate", "ticketcreationdate", "creationdate", "createddate", "createdon", "dateadded", "addeddate", "addedon"],
   closed: ["ticketcloseddate", "closeddate", "closuredate", "closedon", "closedate"],
-  status: ["ticketstatus", "status"],
-  type: ["tickettype", "calltype", "type"],
+  status: ["newticketstatus", "ticketstatus", "status"],
+  type: ["newtickettype", "tickettype", "calltype", "type"],
   product: ["productcode", "productmodel", "model", "productname", "product"],
   category: ["productcategory", "category"],
   serial: ["serialno", "serialnumber", "serial", "srno"],
@@ -31,7 +32,9 @@ const ALIASES: Record<Role, string[]> = {
   city: ["city"],
   state: ["state"],
   fcn: ["fcnno", "fcnnumber", "fcnid", "fcnref", "fcnreference", "fcn"],
-  fcnClosed: ["fcncloseddate", "fcnclosuredate", "fcnclosedate", "fcnclosedon", "fcncompletiondate", "fcndate"],
+  fcnClosed: ["callcloseddateasperfcn", "fcncloseddate", "fcnclosuredate", "fcnclosedate", "fcnclosedon", "fcncompletiondate", "fcndate"],
+  fcnAttached: ["fcnattachedornot", "fcnattached", "fcnattachedyn"],
+  serviceTat: ["tatservice", "servicetat", "serivcetat", "servicedays"],
   crmClosed: ["crmtimelineclosuredate", "crmtimelineclosedate", "crmtimelinecloseddate", "crmtimelinedate", "crmclosuredate", "crmcloseddate", "crmtimeline"],
   days: ["noofdays", "noofday", "numberofdays", "ageingdays", "agingdays", "ageing", "aging", "days"],
 };
