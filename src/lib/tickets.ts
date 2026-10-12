@@ -61,6 +61,8 @@ export interface Ticket {
   /** Raw text in an FCN/CRM date cell that could not be read as a date. */
   fcnInvalid: boolean;
   crmInvalid: boolean;
+  /** Numeric value of the TAT Service column, when it holds a plain number. */
+  serviceTatN: number | null;
   dims: Partial<Record<Role, string | null>>;
 }
 export interface Dataset {
@@ -179,7 +181,7 @@ export function parseWorkbook(buf: ArrayBuffer, fileName: string, preferredSheet
   });
   const dateColumns = columns.filter((c) => /date|crm\s*timeline/i.test(c));
   const mapping = mapColumns(columns);
-  const OPTIONAL: Role[] = ["days", "fcn", "fcnClosed", "crmClosed"];
+  const OPTIONAL: Role[] = ["days", "fcn", "fcnClosed", "crmClosed", "fcnAttached", "serviceTat"];
   const missing = (Object.keys(ALIASES) as Role[]).filter((r) => !mapping[r] && !OPTIONAL.includes(r));
   const required: Role[] = ["ticketId", "status"];
   const reqMissing = required.filter((r) => !mapping[r]);
@@ -232,15 +234,18 @@ export function parseWorkbook(buf: ArrayBuffer, fileName: string, preferredSheet
     });
     const id = dims.ticketId ?? null;
     if (id) { const c = seen.get(id) || 0; if (c >= 1) duplicateIds++; seen.set(id, c + 1); }
-    const isFcn = !!dims.fcn || !!fcnClosed || fcnInvalid || /\bfcn\b/i.test(dims.type ?? "");
-    tickets.push({ _idx: i, raw, id, created, closed, tat, age, statusGroup, dims, isFcn, fcnClosed, crmClosed, fcnTat: diff(fcnClosed), crmTat: diff(crmClosed), fcnInvalid, crmInvalid });
+    const stv = get("serviceTat");
+    const serviceTatN = typeof stv === "number" && Number.isFinite(stv) && stv >= 0 ? stv : null;
+    const fcnYes = /^y/i.test(dims.fcnAttached ?? "");
+    const isFcn = fcnYes || !!dims.fcn || !!fcnClosed || fcnInvalid || /\bfcn\b/i.test(dims.type ?? "");
+    tickets.push({ _idx: i, raw, id, created, closed, tat, age, statusGroup, dims, isFcn, fcnClosed, crmClosed, fcnTat: diff(fcnClosed), crmTat: diff(crmClosed), fcnInvalid, crmInvalid, serviceTatN });
   });
   if (!tickets.length) throw new ExcelReadError(`Sheet “${sheet}” has headers but no ticket rows.`, columns);
   return { fileName, sheetNames, sheet, columns, dateColumns, mapping, missing, tickets, duplicateIds, loadedAt: new Date() };
 }
 
 // ---------- Filters ----------
-export const MULTI_ROLES = ["status", "type", "category", "product", "engineer", "zone", "branch", "customer", "warranty"] as const;
+export const MULTI_ROLES = ["status", "type", "category", "product", "engineer", "zone", "branch", "customer", "warranty", "fcnAttached"] as const;
 export type MultiRole = (typeof MULTI_ROLES)[number];
 export interface Filters {
   ticketId: string;
@@ -255,11 +260,14 @@ export interface Filters {
   kpi: KpiKey | null;
   ageBucket: string | null;
 }
-export type KpiKey = "total" | "open" | "closed" | "pending" | "tat" | "period";
+export type KpiKey = "serviceTotal" | "serviceOpen" | "serviceClosed" | "serviceTat" | "fcnAttached";
 export const KPI_LABELS: Record<KpiKey, string> = {
-  total: "All Tickets", open: "Open Tickets", closed: "Closed Tickets", pending: "Pending / Other Tickets",
-  tat: "Tickets used for TAT", period: "Created in Period",
+  serviceTotal: "Total Service Tickets", serviceOpen: "Open Service Tickets", serviceClosed: "Closed Service Tickets",
+  serviceTat: "Tickets with numeric TAT Service", fcnAttached: "FCN Attached Tickets",
 };
+/** A ticket counts as a Service ticket when its (New) Ticket Type starts with "Service"; when the type column is missing, every ticket counts. */
+export const isServiceTicket = (t: Ticket, hasType: boolean) => !hasType || /^serv/i.test(t.dims.type ?? "");
+export const isFcnAttached = (t: Ticket) => /^y/i.test(t.dims.fcnAttached ?? "");
 export const AGE_BUCKETS: { name: string; lo: number; hi: number; level: 1 | 2 | 3 | 4 | 5 }[] = [
   { name: "0–4 Days", lo: 0, hi: 4, level: 1 }, { name: "5–10 Days", lo: 5, hi: 10, level: 2 },
   { name: "11–15 Days", lo: 11, hi: 15, level: 3 }, { name: "16–30 Days", lo: 16, hi: 30, level: 4 },
@@ -283,18 +291,14 @@ export function periodRange(rows: Ticket[], f: Filters): { from: number | null; 
   if (max === -Infinity) return { from: null, to: null, label: "No creation dates" };
   return { from: max - 29 * 86400000, to: max + 86399999, label: `Last 30 days of data (to ${fmtDate(new Date(max))})` };
 }
-export function kpiMatch(t: Ticket, k: KpiKey, period?: { from: number | null; to: number | null }) {
+export function kpiMatch(t: Ticket, k: KpiKey, hasType: boolean) {
+  const svc = isServiceTicket(t, hasType);
   switch (k) {
-    case "total": return true;
-    case "open": return t.statusGroup === "Open";
-    case "closed": return t.statusGroup === "Closed";
-    case "pending": return t.statusGroup === "Pending / Other";
-    case "tat": return t.tat != null;
-    case "period": {
-      if (!t.created || !period || (period.from == null && period.to == null)) return false;
-      const v = t.created.getTime();
-      return (period.from == null || v >= period.from) && (period.to == null || v <= period.to);
-    }
+    case "serviceTotal": return svc;
+    case "serviceOpen": return svc && t.statusGroup === "Open";
+    case "serviceClosed": return svc && t.statusGroup === "Closed";
+    case "serviceTat": return svc && t.serviceTatN != null;
+    case "fcnAttached": return isFcnAttached(t);
   }
 }
 export const EMPTY_FILTERS: Filters = { ticketId: "", serial: "", year: "", month: "", multi: {}, statusGroup: [], createdFrom: "", createdTo: "", closedFrom: "", closedTo: "", kpi: null, ageBucket: null };
