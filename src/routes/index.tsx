@@ -20,7 +20,8 @@ import {
   type Dataset, type Filters, type KpiKey, type MultiRole, type Ticket,
 } from "@/lib/tickets";
 
-const DATA_URL = "/data/tickets.xlsx";
+import ticketsAsset from "@/assets/tickets.xlsx.asset.json";
+const DATA_URL = ticketsAsset.url;
 type View = "overview" | "normal" | "fcn" | "trends";
 const VIEWS: [View, string][] = [["overview", "Overview"], ["normal", "Normal Service Calls"], ["fcn", "FCN Analysis"], ["trends", "Current Trends"]];
 interface LoadError { message: string; missing: string[]; headers: string[]; file: string }
