@@ -17,7 +17,7 @@ export const ROLE_LABELS: Record<Role, string> = {
 const ALIASES: Record<Role, string[]> = {
   ticketId: ["ticketid", "ticketno", "ticketnumber", "ticket"],
   customer: ["customername", "customer", "hospitalname", "hospital", "accountname"],
-  created: ["systemticketcreationdate", "ticketcreationdate", "creationdate", "createddate", "createdon"],
+  created: ["systemticketcreationdate", "ticketcreationdate", "creationdate", "createddate", "createdon", "dateadded", "addeddate", "addedon"],
   closed: ["ticketcloseddate", "closeddate", "closuredate", "closedon", "closedate"],
   status: ["ticketstatus", "status"],
   type: ["tickettype", "calltype", "type"],
@@ -217,7 +217,9 @@ export function parseWorkbook(buf: ArrayBuffer, fileName: string, preferredSheet
     let age: number | null = null;
     if (mapping.days) {
       const v = get("days");
-      const n = typeof v === "number" ? v : v != null && !(v instanceof Date) ? parseFloat(String(v)) : NaN;
+      // Accept numbers and text like "D 30" / "30 days" — extract the first number.
+      const m = typeof v === "number" ? null : v != null && !(v instanceof Date) ? String(v).match(/-?\d+(\.\d+)?/) : null;
+      const n = typeof v === "number" ? v : m ? parseFloat(m[0]) : NaN;
       age = Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
     } else if (statusGroup === "Closed") age = tat;
     else if (created) { const d = Math.floor((today.getTime() - created.getTime()) / 86400000); age = d >= 0 ? d : null; }
